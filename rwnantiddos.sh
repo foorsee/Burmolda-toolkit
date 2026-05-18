@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Remnanode Interactive Protection & Tuning Script (Menu Edition v4)
+# Remnanode Interactive Protection & Tuning Script (Menu Edition v5)
 # ==============================================================================
 
 RED='\033[0;31m'
@@ -13,7 +13,6 @@ NC='\033[0m'
 
 LOG_FILE="/tmp/remnanode_install.log"
 
-# ЖЕСТКАЯ ПРОВЕРКА НА ROOT / SUDO
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}ОШИБКА: Запустите скрипт через sudo! / Please run as root!${NC}"
   exit 1
@@ -40,18 +39,20 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     M_TITLE="МЕНЮ НАСТРОЙКИ ЗАЩИТЫ REMNANODE"
     M_IP="Ваш IP:"
     M_ASN="Провайдер:"
-    M_OPT_1="1. Настроить сетевой экран (UFW)"
+    M_OPT_1="1. Настроить сетевой экран (UFW + Блок спама/25 порт)"
     M_OPT_2="2. Установить защиту от сканеров (Traffic-Guard)"
-    M_OPT_3="3. Установить CrowdSec (Защита от брутфорса)"
+    M_OPT_3="3. Установить CrowdSec (Сетевая защита)"
     M_OPT_4="4. Настроить Гео-блокировку DDoS"
     M_OPT_5="5. Оптимизация сети (Отключить IPv6, BBR+CAKE)"
     M_OPT_6="6. Запустить Speedtest"
     M_OPT_7="7. Проверить геобазы (IP Region)"
+    M_OPT_8="8. Установить Fail2Ban (Защита SSH)"
     M_OPT_0="0. Выход"
     M_CHOOSE="Выберите действие"
     
     P_SSH="Введите ваш текущий SSH порт (например, 22): "
     P_VPN="Введите порт вашего VPN/VLESS: "
+    P_PANEL="Введите IP вашей панели (или нажмите Enter для пропуска): "
     P_TG_SSH="ВАЖНО: Введите ваш SSH порт, чтобы Traffic-Guard не заблокировал вас: "
     P_GEO_INFO="Введите номера стран через пробел (например: 1 3 5) или 'all': "
     P_GEO_SKIP="Страны не выбраны, пропускаем."
@@ -67,18 +68,20 @@ else
     M_TITLE="REMNANODE SECURITY SETUP MENU"
     M_IP="Your IP:"
     M_ASN="ASN:"
-    M_OPT_1="1. Setup Firewall (UFW)"
+    M_OPT_1="1. Setup Firewall (UFW + Block Spam/Port 25)"
     M_OPT_2="2. Install Anti-scanner (Traffic-Guard)"
-    M_OPT_3="3. Install CrowdSec (Brute-force protection)"
+    M_OPT_3="3. Install CrowdSec (Network protection)"
     M_OPT_4="4. Setup Geo-blocking for DDoS"
     M_OPT_5="5. Network Tuning (Disable IPv6, BBR+CAKE)"
     M_OPT_6="6. Run Speedtest"
     M_OPT_7="7. Check Geo-databases (IP Region)"
+    M_OPT_8="8. Install Fail2Ban (SSH protection)"
     M_OPT_0="0. Exit"
     M_CHOOSE="Select an option"
     
     P_SSH="Enter your current SSH port (e.g., 22): "
     P_VPN="Enter your VPN/VLESS port: "
+    P_PANEL="Enter your Panel IP (or press Enter to skip): "
     P_TG_SSH="CRITICAL: Enter your SSH port so Traffic-Guard doesn't lock you out: "
     P_GEO_INFO="Enter country numbers separated by space (e.g., 1 3 5) or 'all': "
     P_GEO_SKIP="No countries selected, skipping."
@@ -178,13 +181,39 @@ run_with_loader() {
 # Рабочие функции
 # ==========================================
 setup_ufw() {
+    local ssh_port=$1
+    local vpn_port=$2
+    local panel_ip=$3
+
     ufw --force reset
     ufw default deny incoming
     ufw default allow outgoing
-    ufw allow $1/tcp comment 'SSH'
+
+    # Базовые порты
+    ufw allow $ssh_port/tcp comment 'SSH'
     ufw allow 80/tcp comment 'HTTP'
     ufw allow 443/tcp comment 'HTTPS'
-    ufw allow $2 comment 'VPN/Xray'
+    ufw allow $vpn_port comment 'VPN/Xray'
+
+    # Разрешение для панели (если указан IP)
+    if [ -n "$panel_ip" ]; then
+        ufw allow from "$panel_ip" to any port $vpn_port proto tcp comment 'Panel_IP'
+    fi
+
+    # Блокировка спам-портов (исходящие)
+    for port in 25 465 587 2525 24 387; do
+        ufw deny out to any port $port proto tcp comment 'Block_Spam'
+    done
+    
+    # Блокировка SIP
+    ufw deny out to any port 5060 proto udp comment 'Block_SIP'
+
+    # Блокировка вредоносных/телеметрических IP
+    local bad_ips=("34.209.195.255" "3.229.117.57" "52.16.171.153" "3.238.30.69" "34.16.47.102" "44.244.22.128" "3.250.92.156" "3.222.192.211")
+    for ip in "${bad_ips[@]}"; do
+        ufw deny out from any to $ip comment 'Block_Malicious_IP'
+    done
+
     ufw --force enable
 }
 
@@ -194,8 +223,6 @@ setup_traffic_guard() {
     ufw allow $ssh_port/tcp comment 'TG Safe SSH' 2>/dev/null
     
     curl -fsSL https://raw.githubusercontent.com/dotX12/traffic-guard/master/install.sh | bash
-    
-    # Новая команда Traffic-Guard с двумя листами и логированием
     traffic-guard full \
       -u https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/refs/heads/main/public/antiscanner.list \
       -u https://raw.githubusercontent.com/shadow-netlab/traffic-guard-lists/refs/heads/main/public/government_networks.list \
@@ -207,6 +234,23 @@ setup_crowdsec() {
     apt-get install -yq crowdsec crowdsec-firewall-bouncer-iptables
     systemctl enable crowdsec
     systemctl start crowdsec
+}
+
+setup_fail2ban() {
+    local ssh_port=$1
+    apt-get install fail2ban -y
+    cat > /etc/fail2ban/jail.local <<EOL
+[sshd]
+enabled   = true
+port      = $ssh_port
+maxretry  = 5
+findtime  = 1h
+bantime   = 1d
+ignoreip  = 127.0.0.1/8
+banaction = ufw
+EOL
+    systemctl restart fail2ban
+    systemctl enable fail2ban
 }
 
 setup_geoblock() {
@@ -260,17 +304,24 @@ while true; do
     echo "$M_OPT_5"
     echo "$M_OPT_6"
     echo "$M_OPT_7"
+    echo "$M_OPT_8"
     echo "$M_OPT_0"
     echo -e "${BLUE}${BOLD}====================================================${NC}"
-    read -p "${M_CHOOSE} [0-7]: " choice
+    read -p "${M_CHOOSE} [0-8]: " choice
     
     case $choice in
         1)
             echo -n -e "${YELLOW}${P_SSH}${NC}"
             read SSH_PORT
+            if [ -z "$SSH_PORT" ]; then SSH_PORT=22; fi
+            
             echo -n -e "${YELLOW}${P_VPN}${NC}"
             read VPN_PORT
-            run_with_loader "setup_ufw $SSH_PORT $VPN_PORT"
+            
+            echo -n -e "${YELLOW}${P_PANEL}${NC}"
+            read PANEL_IP
+            
+            run_with_loader "setup_ufw $SSH_PORT $VPN_PORT '$PANEL_IP'"
             ;;
         2)
             echo -n -e "${RED}${BOLD}${P_TG_SSH}${NC}"
@@ -331,6 +382,12 @@ while true; do
             bash <(wget -qO- https://ipregion.vrnt.xyz)
             echo -e "${BLUE}----------------------------${NC}"
             read -p "${S_ENTER}"
+            ;;
+        8)
+            echo -n -e "${YELLOW}${P_SSH}${NC}"
+            read F2B_SSH_PORT
+            if [ -z "$F2B_SSH_PORT" ]; then F2B_SSH_PORT=22; fi
+            run_with_loader "setup_fail2ban $F2B_SSH_PORT"
             ;;
         0)
             exit 0
