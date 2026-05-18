@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Remnanode Interactive Protection & Tuning Script (Menu Edition v5)
+# Remnanode Interactive Protection & Tuning Script (Menu Edition v6)
 # ==============================================================================
 
 RED='\033[0;31m'
@@ -39,7 +39,7 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     M_TITLE="МЕНЮ НАСТРОЙКИ ЗАЩИТЫ REMNANODE"
     M_IP="Ваш IP:"
     M_ASN="Провайдер:"
-    M_OPT_1="1. Настроить сетевой экран (UFW + Блок спама/25 порт)"
+    M_OPT_1="1. Настроить сетевой экран (UFW + Авто-Домен + Блок 25)"
     M_OPT_2="2. Установить защиту от сканеров (Traffic-Guard)"
     M_OPT_3="3. Установить CrowdSec (Сетевая защита)"
     M_OPT_4="4. Настроить Гео-блокировку DDoS"
@@ -52,7 +52,7 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     
     P_SSH="Введите ваш текущий SSH порт (например, 22): "
     P_VPN="Введите порт вашего VPN/VLESS: "
-    P_PANEL="Введите IP вашей панели (или нажмите Enter для пропуска): "
+    P_PANEL="Введите IP или ДОМЕН вашей панели (или Enter для пропуска): "
     P_TG_SSH="ВАЖНО: Введите ваш SSH порт, чтобы Traffic-Guard не заблокировал вас: "
     P_GEO_INFO="Введите номера стран через пробел (например: 1 3 5) или 'all': "
     P_GEO_SKIP="Страны не выбраны, пропускаем."
@@ -68,7 +68,7 @@ else
     M_TITLE="REMNANODE SECURITY SETUP MENU"
     M_IP="Your IP:"
     M_ASN="ASN:"
-    M_OPT_1="1. Setup Firewall (UFW + Block Spam/Port 25)"
+    M_OPT_1="1. Setup Firewall (UFW + Auto-Domain + Block 25)"
     M_OPT_2="2. Install Anti-scanner (Traffic-Guard)"
     M_OPT_3="3. Install CrowdSec (Network protection)"
     M_OPT_4="4. Setup Geo-blocking for DDoS"
@@ -81,7 +81,7 @@ else
     
     P_SSH="Enter your current SSH port (e.g., 22): "
     P_VPN="Enter your VPN/VLESS port: "
-    P_PANEL="Enter your Panel IP (or press Enter to skip): "
+    P_PANEL="Enter your Panel IP or DOMAIN (or press Enter to skip): "
     P_TG_SSH="CRITICAL: Enter your SSH port so Traffic-Guard doesn't lock you out: "
     P_GEO_INFO="Enter country numbers separated by space (e.g., 1 3 5) or 'all': "
     P_GEO_SKIP="No countries selected, skipping."
@@ -97,7 +97,7 @@ fi
 
 # Предварительная установка
 apt update -q >/dev/null 2>&1
-apt install -yq ufw curl wget ipset iptables speedtest-cli >/dev/null 2>&1
+apt install -yq ufw curl wget ipset iptables speedtest-cli cron >/dev/null 2>&1
 
 # ==========================================
 # Анимация Звезды
@@ -183,7 +183,7 @@ run_with_loader() {
 setup_ufw() {
     local ssh_port=$1
     local vpn_port=$2
-    local panel_ip=$3
+    local panel_input=$3
 
     ufw --force reset
     ufw default deny incoming
@@ -195,9 +195,47 @@ setup_ufw() {
     ufw allow 443/tcp comment 'HTTPS'
     ufw allow $vpn_port comment 'VPN/Xray'
 
-    # Разрешение для панели (если указан IP)
-    if [ -n "$panel_ip" ]; then
-        ufw allow from "$panel_ip" to any port $vpn_port proto tcp comment 'Panel_IP'
+    # Разрешение для панели (IP или Домен)
+    if [ -n "$panel_input" ]; then
+        # Проверка, является ли ввод IP адресом (простая регулярка)
+        if [[ $panel_input =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            ufw allow from "$panel_input" to any port $vpn_port proto tcp comment 'Panel_IP'
+        else
+            # Это домен, резолвим его
+            local panel_ip=$(getent ahosts "$panel_input" | head -n 1 | awk '{print $1}')
+            
+            if [ -n "$panel_ip" ]; then
+                ufw allow from "$panel_ip" to any port $vpn_port proto tcp comment 'Panel_IP'
+                
+                # Создаем скрипт-автоапдейтер
+                cat > /usr/local/bin/remnanode_ufw_updater.sh <<EOF
+#!/bin/bash
+DOMAIN="$panel_input"
+PORT="$vpn_port"
+OLD_IP_FILE="/var/run/remnanode_panel_ip.txt"
+OLD_IP=\$(cat \$OLD_IP_FILE 2>/dev/null)
+NEW_IP=\$(getent ahosts \$DOMAIN | head -n 1 | awk '{print \$1}')
+
+if [ -n "\$NEW_IP" ] && [ "\$NEW_IP" != "\$OLD_IP" ]; then
+    if [ -n "\$OLD_IP" ]; then
+        ufw delete allow from \$OLD_IP to any port \$PORT proto tcp 2>/dev/null
+    fi
+    ufw allow from \$NEW_IP to any port \$PORT proto tcp comment 'Panel_IP'
+    echo \$NEW_IP > \$OLD_IP_FILE
+    ufw reload
+fi
+EOF
+                chmod +x /usr/local/bin/remnanode_ufw_updater.sh
+                echo "$panel_ip" > /var/run/remnanode_panel_ip.txt
+                
+                # Добавляем в cron (каждые 6 часов)
+                crontab -l 2>/dev/null | grep -v "/usr/local/bin/remnanode_ufw_updater.sh" > /tmp/cron_temp
+                echo "0 */6 * * * /usr/local/bin/remnanode_ufw_updater.sh >/dev/null 2>&1" >> /tmp/cron_temp
+                crontab /tmp/cron_temp
+                rm /tmp/cron_temp
+                systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
+            fi
+        fi
     fi
 
     # Блокировка спам-портов (исходящие)
