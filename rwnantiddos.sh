@@ -195,26 +195,37 @@ setup_ufw() {
     ufw allow 443/tcp comment 'HTTPS'
     ufw allow $vpn_port comment 'VPN/Xray'
 
-    # Разрешение для панели (IP или Домен)
+# Разрешение для панели (IP или Домен)
     if [ -n "$panel_input" ]; then
-        # Проверка, является ли ввод IP адресом (простая регулярка)
+        # Проверка, является ли ввод чистым IPv4 адресом
         if [[ $panel_input =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             ufw allow from "$panel_input" to any port $vpn_port proto tcp comment 'Panel_IP'
         else
-            # Это домен, резолвим его
-            local panel_ip=$(getent ahosts "$panel_input" | head -n 1 | awk '{print $1}')
+            # Ставим dnsutils если вдруг нет, чтобы dig/nslookup работали железно
+            apt-get install -yq dnsutils >/dev/null 2>&1
+            
+            # Жесткий резолв строго IPv4 через dig, если мимо - через nslookup
+            local panel_ip=$(dig +short A "$panel_input" | grep -E '^[0-9.]+$' | head -n 1)
+            if [ -z "$panel_ip" ]; then
+                panel_ip=$(nslookup "$panel_input" 2>/dev/null | awk '/^Address: / { print $2 }' | head -n 1)
+            fi
             
             if [ -n "$panel_ip" ]; then
                 ufw allow from "$panel_ip" to any port $vpn_port proto tcp comment 'Panel_IP'
                 
-                # Создаем скрипт-автоапдейтер
+                # Создаем скрипт-автоапдейтер с новым методом резолвинга
                 cat > /usr/local/bin/remnanode_ufw_updater.sh <<EOF
 #!/bin/bash
 DOMAIN="$panel_input"
 PORT="$vpn_port"
 OLD_IP_FILE="/var/run/remnanode_panel_ip.txt"
 OLD_IP=\$(cat \$OLD_IP_FILE 2>/dev/null)
-NEW_IP=\$(getent ahosts \$DOMAIN | head -n 1 | awk '{print \$1}')
+
+# Резолвим строго IPv4
+NEW_IP=\$(dig +short A "\$DOMAIN" | grep -E '^[0-9.]+$' | head -n 1)
+if [ -z "\$NEW_IP" ]; then
+    NEW_IP=\$(nslookup "\$DOMAIN" 2>/dev/null | awk '/^Address: / { print \$2 }' | head -n 1)
+fi
 
 if [ -n "\$NEW_IP" ] && [ "\$NEW_IP" != "\$OLD_IP" ]; then
     if [ -n "\$OLD_IP" ]; then
