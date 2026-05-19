@@ -211,16 +211,25 @@ run_with_loader() {
 # ==========================================
 setup_xanmod_bbr3() {
     export DEBIAN_FRONTEND=noninteractive
+    
+    # 1. Установка официального репозитория XanMod по новым правилам
     apt-get update && apt-get install -y wget gpg ca-certificates lsb-release
     
-    mkdir -p /etc/apt/sources.list.d
-    rm -f /etc/apt/sources.list.distrib.d/xanmod.list 2>/dev/null
+    # Создаем директорию для ключей и чистим старые конфиги
+    mkdir -p /etc/apt/keyrings
+    rm -f /etc/apt/sources.list.d/xanmod.list /etc/apt/sources.list.d/xanmod-release.list 2>/dev/null
     
-    wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor -o /usr/share/keyrings/xanmod-archive-keyring.gpg --yes
-    echo 'deb [signed-by=/usr/share/keyrings/xanmod-archive-keyring.gpg] http://dl.xanmod.org/repository debian main' | tee /etc/apt/sources.list.d/xanmod.list
+    # Импортируем PGP ключ в правильное место
+    wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor -y -o /etc/apt/keyrings/xanmod-archive-keyring.gpg
+    
+    # Добавляем репозиторий с автоматическим определением кодового имени дистрибутива
+    echo "deb [signed-by=/etc/apt/keyrings/xanmod-archive-keyring.gpg] http://deb.xanmod.org $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/xanmod-release.list
+    
     apt-get update
-    apt-get install -yq linux-image-xanmod-edge linux-headers-xanmod-edge
+    # Устанавливаем современный стабильный метапакет ядра v3 (включает BBRv3) + зависимости
+    apt-get install -yq linux-xanmod-x64v3 dkms libelf-dev clang lld llvm
 
+    # 2. Тюнинг Sysctl (BBRv3, TFO, Conntrack)
     local sysctl_conf="/etc/sysctl.d/99-network-optimization.conf"
     cat << 'EOF' > $sysctl_conf
 net.core.default_qdisc = fq
@@ -235,6 +244,7 @@ EOF
     modprobe nf_conntrack 2>/dev/null
     sysctl --system
 
+    # 3. Настройка Nftables (Универсальный синтаксис MSS Clamping)
     apt-get install -y nftables
     systemctl enable nftables
 
