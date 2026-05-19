@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Remnanode Interactive Protection & Tuning Script (Menu Edition v10 - Final)
+# Remnanode Interactive Protection & Tuning Script (Menu Edition v11 - Бронебойная)
 # Supports: Debian 11/12/13, Ubuntu 22.04/24.04
 # ==============================================================================
 
@@ -35,7 +35,6 @@ USER_IP=$(curl -s ifconfig.me)
 USER_ASN=$(curl -s ipinfo.io/org)
 if [ -z "$USER_ASN" ]; then USER_ASN="Unknown ASN"; fi
 
-# Массивы стран
 COUNTRY_CODES=("CN" "IN" "BR" "PK" "VN" "TW" "BD" "ID" "IR" "ZA" "MX" "EC")
 COUNTRY_EN=("China" "India" "Brazil" "Pakistan" "Vietnam" "Taiwan" "Bangladesh" "Indonesia" "Iran" "South Africa" "Mexico" "Ecuador")
 COUNTRY_RU=("Китай" "Индия" "Бразилия" "Пакистан" "Вьетнам" "Тайвань" "Бангладеш" "Индонезия" "Иран" "Южная Африка" "Мексика" "Эквадор")
@@ -77,7 +76,7 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     P_GEO_SKIP="Страны не выбраны, пропускаем."
     
     W_XAN_TITLE="⚠️ ВНИМАНИЕ / WARNING ⚠️"
-    W_XAN_TEXT="Эта operation заменит стандартное ядро Linux на кастомное ядро XanMod (с поддержкой BBRv3), перенастроит sysctl и развернет правила nftables (MSS Clamping).\nВАЖНО: Выполнение этого шага сбросит (flush) текущие правила файрвола, поэтому его делают ПЕРВЫМ.\n\nВы уверены, что хотите продолжить? [y/n]: "
+    W_XAN_TEXT="Эта операция заменит стандартное ядро Linux на кастомное ядро XanMod (с поддержкой BBRv3), перенастроит sysctl и развернет правила nftables (MSS Clamping).\nВАЖНО: Выполнение этого шага сбросит (flush) текущие правила файрвола, поэтому его делают ПЕРВЫМ.\n\nВы уверены, что хотите продолжить? [y/n]: "
     W_XAN_REBOOT="⚠️ Скрипт отработал. Для активации нового ядра XanMod и BBRv3 ОБЯЗАТЕЛЬНО перезагрузите сервер командой: sudo reboot"
     
     S_SPIN="Выполнение задачи"
@@ -124,12 +123,11 @@ else
     S_GEO_CHECK="Geo-database Check"
 fi
 
-# Предварительная установка базовых утилит
 apt update -q >/dev/null 2>&1
 apt install -yq ufw curl wget ipset iptables speedtest-cli cron >/dev/null 2>&1
 
 # ==========================================
-# Анимация Звезды Давида
+# Анимация Звезды
 # ==========================================
 spin_david_star() {
     local pid=$1
@@ -212,23 +210,18 @@ run_with_loader() {
 setup_xanmod_bbr3() {
     export DEBIAN_FRONTEND=noninteractive
     
-    # 1. Установка репозитория XanMod
     apt-get update && apt-get install -y wget curl gpg ca-certificates lsb-release
     
     mkdir -p /etc/apt/keyrings
     rm -f /etc/apt/sources.list.d/xanmod.list /etc/apt/sources.list.d/xanmod-release.list /etc/apt/keyrings/xanmod-archive-keyring.gpg 2>/dev/null
     
-    # Скачиваем ключ
     curl -fsSL https://dl.xanmod.org/archive.key -o /etc/apt/keyrings/xanmod-archive-keyring.gpg
     
-    # Прописываем репозиторий
     echo "deb [signed-by=/etc/apt/keyrings/xanmod-archive-keyring.gpg] http://deb.xanmod.org $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/xanmod-release.list
     
     apt-get update
-    # Установка метапакета ядра и зависимостей
     apt-get install -yq linux-xanmod-x64v3 dkms libelf-dev clang lld llvm
 
-    # 2. Тюнинг Sysctl (BBRv3, TFO, Conntrack)
     local sysctl_conf="/etc/sysctl.d/99-network-optimization.conf"
     cat << 'EOF' > $sysctl_conf
 net.core.default_qdisc = fq
@@ -243,7 +236,6 @@ EOF
     modprobe nf_conntrack 2>/dev/null
     sysctl --system
 
-    # 3. Настройка Nftables (Чистый и рабочий синтаксис)
     apt-get install -y nftables
     systemctl enable nftables
 
@@ -265,17 +257,12 @@ table inet filter {
 
     chain input {
         type filter hook input priority filter; policy accept;
-        
-        # Считаем трафик важных портов, но таймауты регулируются глобально в sysctl
         tcp dport { 22, 80, 443 } counter name tier_high
-        
         counter name tier_normal
     }
 
     chain forward {
         type filter hook forward priority filter; policy accept;
-        
-        # MSS Clamping для стабильной работы VPN
         oifname "$interface" tcp flags & (syn | rst) == syn tcp option maxseg size set rt mtu
     }
 
@@ -330,7 +317,7 @@ setup_ufw() {
                 ufw allow from "$panel_ip" to any port $vpn_port proto tcp comment 'Panel_IP'
                 
                 cat > /usr/local/bin/remnanode_ufw_updater.sh <<EOF
-#!/bash
+#!/bin/bash
 DOMAIN="$panel_input"
 PORT="$vpn_port"
 OLD_IP_FILE="/var/run/remnanode_panel_ip.txt"
