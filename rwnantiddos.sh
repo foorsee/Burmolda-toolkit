@@ -212,21 +212,20 @@ run_with_loader() {
 setup_xanmod_bbr3() {
     export DEBIAN_FRONTEND=noninteractive
     
-    # 1. Установка официального репозитория XanMod по новым правилам
-    apt-get update && apt-get install -y wget gpg ca-certificates lsb-release
+    # 1. Установка репозитория XanMod (Фикс для sqv в Debian 13)
+    apt-get update && apt-get install -y wget curl gpg ca-certificates lsb-release
     
-    # Создаем директорию для ключей и чистим старые конфиги
     mkdir -p /etc/apt/keyrings
-    rm -f /etc/apt/sources.list.d/xanmod.list /etc/apt/sources.list.d/xanmod-release.list 2>/dev/null
+    rm -f /etc/apt/sources.list.d/xanmod.list /etc/apt/sources.list.d/xanmod-release.list /etc/apt/keyrings/xanmod-archive-keyring.gpg 2>/dev/null
     
-    # Импортируем PGP ключ в правильное место
-    wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor -y -o /etc/apt/keyrings/xanmod-archive-keyring.gpg
+    # Скачиваем ключ напрямую в бинарном формате, чтобы sqv / apt не спотыкались
+    curl -fsSL https://dl.xanmod.org/archive.key -o /etc/apt/keyrings/xanmod-archive-keyring.gpg
     
-    # Добавляем репозиторий с автоматическим определением кодового имени дистрибутива
+    # Прописываем репозиторий
     echo "deb [signed-by=/etc/apt/keyrings/xanmod-archive-keyring.gpg] http://deb.xanmod.org $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/xanmod-release.list
     
     apt-get update
-    # Устанавливаем современный стабильный метапакет ядра v3 (включает BBRv3) + зависимости
+    # Установка метапакета ядра и зависимостей
     apt-get install -yq linux-xanmod-x64v3 dkms libelf-dev clang lld llvm
 
     # 2. Тюнинг Sysctl (BBRv3, TFO, Conntrack)
@@ -244,7 +243,7 @@ EOF
     modprobe nf_conntrack 2>/dev/null
     sysctl --system
 
-    # 3. Настройка Nftables (Универсальный синтаксис MSS Clamping)
+    # 3. Настройка Nftables (Неубиваемый фикс синтаксиса MSS Clamping)
     apt-get install -y nftables
     systemctl enable nftables
 
@@ -272,7 +271,9 @@ table inet filter {
 
     chain forward {
         type filter hook forward priority filter; policy accept;
-        oifname "$interface" tcp flags syn tcp option maxseg size set rt mtu
+        
+        # Полностью чистый, валидный синтаксис MSS Clamping под новые ядра
+        oifname "$interface" tcp flags & (syn | rst) == syn tcp option maxseg size set rt mtu
     }
 
     chain output {
