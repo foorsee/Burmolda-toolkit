@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==============================================================================
-# Remnanode Interactive Protection & Tuning Script (Menu Edition v11 - Бронебойная)
-# Supports: Debian 11/12/13, Ubuntu 22.04/24.04
+# Remnanode Interactive Protection & Tuning Script (Menu Edition v12)
+# Supports: Debian 11/12/13, Ubuntu 22.04/24.04 + SSH Port Changer
 # ==============================================================================
 
 # ПРИНУДИТЕЛЬНЫЙ ЗАХВАТ ТЕРМИНАЛА (Защита от бага при curl | bash)
@@ -65,6 +65,7 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     M_OPT_7="7. [ШАГ 6] Установить CrowdSec (Сетевой IPS)"
     M_OPT_8="8. [ДИАГНОСТИКА] Запустить Speedtest"
     M_OPT_9="9. [ДИАГНОСТИКА] Проверить геобазы (IP Region)"
+    M_OPT_10="10.[СИСТЕМА] Сменить порт SSH"
     M_OPT_0="0. Выход"
     M_CHOOSE="Выберите действие"
     
@@ -74,10 +75,12 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     P_TG_SSH="ВАЖНО: Введите ваш SSH порт, чтобы Traffic-Guard не заблокировал вас: "
     P_GEO_INFO="Введите номера стран через пробел (например: 1 3 5) или 'all': "
     P_GEO_SKIP="Страны не выбраны, пропускаем."
+    P_NEW_SSH="Введите новый порт для SSH (1024-65535): "
     
     W_XAN_TITLE="⚠️ ВНИМАНИЕ / WARNING ⚠️"
     W_XAN_TEXT="Эта операция заменит стандартное ядро Linux на кастомное ядро XanMod (с поддержкой BBRv3), перенастроит sysctl и развернет правила nftables (MSS Clamping).\nВАЖНО: Выполнение этого шага сбросит (flush) текущие правила файрвола, поэтому его делают ПЕРВЫМ.\n\nВы уверены, что хотите продолжить? [y/n]: "
     W_XAN_REBOOT="⚠️ Скрипт отработал. Для активации нового ядра XanMod и BBRv3 ОБЯЗАТЕЛЬНО перезагрузите сервер командой: sudo reboot"
+    W_SSH_REBOOT="⚠️ ВАЖНО: НЕ ЗАКРЫВАЙТЕ ЭТО ОКНО ТЕРМИНАЛА!\nОткройте новую сессию и проверьте вход командой:"
     
     S_SPIN="Выполнение задачи"
     S_ERR="[ОШИБКА] Процесс завершился с кодом"
@@ -100,6 +103,7 @@ else
     M_OPT_7="7. [STEP 6] Install CrowdSec (Network IPS)"
     M_OPT_8="8. [DIAGNOSTICS] Run Speedtest"
     M_OPT_9="9. [DIAGNOSTICS] Check Geo-databases (IP Region)"
+    M_OPT_10="10.[SYSTEM] Change SSH Port"
     M_OPT_0="0. Exit"
     M_CHOOSE="Select an option"
     
@@ -109,10 +113,12 @@ else
     P_TG_SSH="CRITICAL: Enter your SSH port so Traffic-Guard doesn't lock you out: "
     P_GEO_INFO="Enter country numbers separated by space (e.g., 1 3 5) or 'all': "
     P_GEO_SKIP="No countries selected, skipping."
+    P_NEW_SSH="Enter new SSH port (1024-65535): "
     
     W_XAN_TITLE="⚠️ WARNING / ВНИМАНИЕ ⚠️"
     W_XAN_TEXT="This operation will replace your stock Linux kernel with custom XanMod kernel (enabling BBRv3), tune sysctl, and deploy nftables (MSS Clamping).\nCRITICAL: Running this step will FLUSH current firewall rules, which is why it must be executed FIRST.\n\nAre you sure you want to proceed? [y/n]: "
     W_XAN_REBOOT="⚠️ Task finished. To activate the new XanMod kernel and BBRv3, you MUST reboot the server using: sudo reboot"
+    W_SSH_REBOOT="⚠️ CRITICAL: DO NOT CLOSE THIS TERMINAL WINDOW!\nOpen a new session and verify login using:"
     
     S_SPIN="Executing task"
     S_ERR="[ERROR] Process failed with exit code"
@@ -415,6 +421,33 @@ setup_crowdsec() {
     systemctl start crowdsec
 }
 
+change_ssh_port() {
+    local new_port=$1
+    local sshd_config="/etc/ssh/sshd_config"
+
+    sed -i -e "s/^#\?Port .*/Port $new_port/" "$sshd_config"
+    if ! grep -q "^Port $new_port" "$sshd_config"; then
+        echo "Port $new_port" >> "$sshd_config"
+    fi
+
+    if command -v ufw > /dev/null; then
+        ufw allow "$new_port"/tcp comment 'SSH_New'
+    elif command -v firewall-cmd > /dev/null; then
+        firewall-cmd --permanent --add-port="$new_port"/tcp
+        firewall-cmd --reload
+    fi
+
+    if command -v semanage > /dev/null; then
+        semanage port -a -t ssh_port_t -p tcp "$new_port" 2>/dev/null || true
+    fi
+
+    if systemctl is-active --quiet ssh; then
+        systemctl restart ssh
+    elif systemctl is-active --quiet sshd; then
+        systemctl restart sshd
+    fi
+}
+
 # ==========================================
 # Главное меню Цикл
 # ==========================================
@@ -434,10 +467,11 @@ while true; do
     echo "$M_OPT_7"
     echo "$M_OPT_8"
     echo "$M_OPT_9"
+    echo "$M_OPT_10"
     echo "$M_OPT_0"
     echo -e "${BLUE}${BOLD}====================================================${NC}"
     
-    if ! read -p "${M_CHOOSE} [0-9]: " choice; then
+    if ! read -p "${M_CHOOSE} [0-10]: " choice; then
         echo -e "\n${RED}Ошибка ввода или обрыв соединения. Выход...${NC}"
         exit 1
     fi
@@ -530,6 +564,21 @@ while true; do
             bash <(wget -qO- https://ipregion.vrnt.xyz)
             echo -e "${BLUE}----------------------------${NC}"
             read -p "${S_ENTER}"
+            ;;
+        10)
+            echo -n -e "${YELLOW}${P_NEW_SSH}${NC}"
+            read NEW_SSH_PORT
+            if ! [[ "$NEW_SSH_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_SSH_PORT" -lt 1024 ] || [ "$NEW_SSH_PORT" -gt 65535 ]; then
+                echo -e "${RED}Ошибка: Порт должен быть числом от 1024 до 65535.${NC}"
+                sleep 2
+            else
+                run_with_loader "change_ssh_port $NEW_SSH_PORT"
+                if [ $? -eq 0 ]; then
+                    echo -e "\n${RED}${BOLD}${W_SSH_REBOOT}${NC}"
+                    echo -e "${GREEN}ssh -p $NEW_SSH_PORT root@${USER_IP}${NC}\n"
+                    read -p "${S_ENTER}"
+                fi
+            fi
             ;;
         0)
             exit 0
