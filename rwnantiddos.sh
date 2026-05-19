@@ -211,12 +211,18 @@ run_with_loader() {
 # ==========================================
 setup_xanmod_bbr3() {
     export DEBIAN_FRONTEND=noninteractive
+    
+    # 1. Репозиторий и ключи XanMod (Фикс пути на sources.list.d)
     apt-get update && apt-get install -y wget gpg ca-certificates lsb-release
+    
+    mkdir -p /etc/apt/sources.list.d
     wget -qO - https://dl.xanmod.org/archive.key | gpg --dearmor -o /usr/share/keyrings/xanmod-archive-keyring.gpg --yes
-    echo 'deb [signed-by=/usr/share/keyrings/xanmod-archive-keyring.gpg] http://dl.xanmod.org/repository debian main' | tee /etc/apt/sources.list.distrib.d/xanmod.list
+    echo 'deb [signed-by=/usr/share/keyrings/xanmod-archive-keyring.gpg] http://dl.xanmod.org/repository debian main' | tee /etc/apt/sources.list.d/xanmod.list
+    
     apt-get update
     apt-get install -yq linux-image-xanmod-edge linux-headers-xanmod-edge
 
+    # 2. Тюнинг Sysctl (BBRv3, TFO, Conntrack)
     local sysctl_conf="/etc/sysctl.d/99-network-optimization.conf"
     cat << 'EOF' > $sysctl_conf
 net.core.default_qdisc = fq
@@ -231,10 +237,15 @@ EOF
     modprobe nf_conntrack
     sysctl --system
 
+    # 3. Настройка Nftables (Умный сбор интерфейса)
     apt-get install -y nftables
     systemctl enable nftables
 
-    local interface=$(ip route show default | awk '/default/ {print $5}' | head -n1)
+    # Более надежный способ вытащить дефолтный интерфейс
+    local interface=$(ip route | grep default | awk '{print $5}' | head -n1)
+    if [ -z "$interface" ]; then
+        interface=$(ip -o link show | awk -F': ' '{print $2}' | grep -v lo | head -n1)
+    fi
     if [ -z "$interface" ]; then interface="eth0"; fi
 
     local nft_conf="/etc/nftables.conf"
