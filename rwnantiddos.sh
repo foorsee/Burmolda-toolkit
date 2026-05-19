@@ -212,13 +212,13 @@ run_with_loader() {
 setup_xanmod_bbr3() {
     export DEBIAN_FRONTEND=noninteractive
     
-    # 1. Установка репозитория XanMod (Фикс для sqv в Debian 13)
+    # 1. Установка репозитория XanMod
     apt-get update && apt-get install -y wget curl gpg ca-certificates lsb-release
     
     mkdir -p /etc/apt/keyrings
     rm -f /etc/apt/sources.list.d/xanmod.list /etc/apt/sources.list.d/xanmod-release.list /etc/apt/keyrings/xanmod-archive-keyring.gpg 2>/dev/null
     
-    # Скачиваем ключ напрямую в бинарном формате, чтобы sqv / apt не спотыкались
+    # Скачиваем ключ
     curl -fsSL https://dl.xanmod.org/archive.key -o /etc/apt/keyrings/xanmod-archive-keyring.gpg
     
     # Прописываем репозиторий
@@ -243,7 +243,7 @@ EOF
     modprobe nf_conntrack 2>/dev/null
     sysctl --system
 
-    # 3. Настройка Nftables (Неубиваемый фикс синтаксиса MSS Clamping)
+    # 3. Настройка Nftables (Чистый и рабочий синтаксис)
     apt-get install -y nftables
     systemctl enable nftables
 
@@ -265,14 +265,17 @@ table inet filter {
 
     chain input {
         type filter hook input priority filter; policy accept;
-        tcp dport { 22, 80, 443 } ct state established ct timeout set 14400 counter name tier_high
+        
+        # Считаем трафик важных портов, но таймауты регулируются глобально в sysctl
+        tcp dport { 22, 80, 443 } counter name tier_high
+        
         counter name tier_normal
     }
 
     chain forward {
         type filter hook forward priority filter; policy accept;
         
-        # Полностью чистый, валидный синтаксис MSS Clamping под новые ядра
+        # MSS Clamping для стабильной работы VPN
         oifname "$interface" tcp flags & (syn | rst) == syn tcp option maxseg size set rt mtu
     }
 
