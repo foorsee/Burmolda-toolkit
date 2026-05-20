@@ -423,44 +423,28 @@ run_ookla_speedtest() {
 
 change_ssh_port() {
     local new_port=$1
-    local conf_dir="/etc/ssh/sshd_config.d"
+    local sshd_config="/etc/ssh/sshd_config"
 
-    # 1. Обеспечиваем работу Include (важно для debian-based систем)
-    mkdir -p "$conf_dir"
-    if ! grep -q "^Include /etc/ssh/sshd_config.d/" /etc/ssh/sshd_config; then
-        sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+    sed -i -e "s/^#\?Port .*/Port $new_port/" "$sshd_config"
+    if ! grep -q "^Port $new_port" "$sshd_config"; then
+        echo "Port $new_port" >> "$sshd_config"
     fi
 
-    # 2. Ядерный удар по 22 порту
-    sed -i 's/^Port 22/#Port 22/' /etc/ssh/sshd_config
-
-    # 3. Создаем конфиг
-    echo "Port $new_port" > "$conf_dir/99-custom-port.conf"
-
-    # 4. Фаервол (без изменений)
     if command -v ufw > /dev/null; then
         ufw allow "$new_port"/tcp comment 'SSH_New'
-        ufw delete allow 22/tcp 2>/dev/null
     elif command -v firewall-cmd > /dev/null; then
         firewall-cmd --permanent --add-port="$new_port"/tcp
         firewall-cmd --reload
     fi
 
-    # 5. КЛЮЧЕВОЙ МОМЕНТ: Останавливаем сокеты, которые могут держать 22 порт
-    # В современных дистрибутивах (Ubuntu 22.04/24.04+) sshd.socket может перехватывать порт
-    if systemctl is-active --quiet sshd.socket; then
-        systemctl stop sshd.socket
-        systemctl disable sshd.socket
+    if command -v semanage > /dev/null; then
+        semanage port -a -t ssh_port_t -p tcp "$new_port" 2>/dev/null || true
     fi
 
-    # 6. Рестарт сервиса
-    if sshd -t; then
-        # Перезагружаем демона
-        systemctl restart ssh 2>/dev/null || systemctl restart sshd
-        echo "Порт успешно изменен на $new_port. Проверь статус: ss -tulpn | grep ssh"
-    else
-        echo "Ошибка в конфигурации! Откат не выполнен."
-        exit 1
+    if systemctl is-active --quiet ssh; then
+        systemctl restart ssh
+    elif systemctl is-active --quiet sshd; then
+        systemctl restart sshd
     fi
 }
 
