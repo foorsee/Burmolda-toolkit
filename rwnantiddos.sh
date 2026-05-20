@@ -1,19 +1,17 @@
 #!/bin/bash
 
 # ==============================================================================
-# Remnanode Interactive Protection & Tuning Script (Menu Edition v12)
-# Supports: Debian 11/12/13, Ubuntu 22.04/24.04 + SSH Port Changer
+# Remnanode Interactive Protection Script (Menu Edition v14 - Ultimate Pro)
+# Supports: Debian 11/12/13, Ubuntu 22.04/24.04
+# Features: XanMod, BBRv3, Nftables/UFW, Systemd NOFILE limits, Ookla Speedtest
 # ==============================================================================
 
-# ПРИНУДИТЕЛЬНЫЙ ЗАХВАТ ТЕРМИНАЛА (Защита от бага при curl | bash)
 if [ ! -t 0 ]; then
     exec < /dev/tty
 fi
 
-# ПРОТИВОАВАРИЙНАЯ ПРОВЕРКА ОБОЛОЧКИ
 if [ -z "$BASH_VERSION" ]; then
     echo "ОШИБКА: Скрипт необходимо запускать через bash, а не sh!"
-    echo "Используйте: bash script.sh (или ./script.sh)"
     exit 1
 fi
 
@@ -25,6 +23,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 LOG_FILE="/tmp/remnanode_install.log"
+> "$LOG_FILE" # Очищаем лог при старте
 
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}ОШИБКА: Запустите скрипт через sudo! / Please run as root!${NC}"
@@ -56,14 +55,14 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     M_IP="Ваш IP:"
     M_ASN="Провайдер:"
     
-    M_OPT_1="1. [ШАГ 1] Продвинутый тюнинг (Ядро XanMod, BBRv3, Nftables) [⚠️ РЕБУТ]"
-    M_OPT_2="2. [ШАГ 1.АЛЬТЕРНАТИВА] Базовый тюнинг сети (Без смены ядра: IPv6 OFF, BBR+CAKE)"
-    M_OPT_3="3. [ШАГ 2] Настроить сетевой экран (UFW + Авто-Домен + Блок 25)"
+    M_OPT_1="1. [ШАГ 1] Продвинутый тюнинг (XanMod, BBRv3, Лимиты FD) [⚠️ РЕБУТ]"
+    M_OPT_2="2. [ШАГ 1.АЛЬТЕРНАТИВА] Базовый тюнинг (BBR+CAKE, IPv6->UFW, Лимиты FD)"
+    M_OPT_3="3. [ШАГ 2] Настроить сетевой экран (UFW + Авто-Домен + MSS Clamping)"
     M_OPT_4="4. [ШАГ 3] Установить защиту от сканеров (Traffic-Guard)"
-    M_OPT_5="5. [ШАГ 4] Настроить Гео-блокировку DDoS (ipset)"
+    M_OPT_5="5. [ШАГ 4] Настроить Гео-блокировку DDoS (ipset пакетно)"
     M_OPT_6="6. [ШАГ 5] Установить Fail2Ban (Защита SSH через UFW)"
     M_OPT_7="7. [ШАГ 6] Установить CrowdSec (Сетевой IPS)"
-    M_OPT_8="8. [ДИАГНОСТИКА] Запустить Speedtest"
+    M_OPT_8="8. [ДИАГНОСТИКА] Запустить Speedtest (Official Ookla)"
     M_OPT_9="9. [ДИАГНОСТИКА] Проверить геобазы (IP Region)"
     M_OPT_10="10.[СИСТЕМА] Сменить порт SSH"
     M_OPT_0="0. Выход"
@@ -78,13 +77,13 @@ if [[ "$LANG_CHOICE" == "2" ]]; then
     P_NEW_SSH="Введите новый порт для SSH (1024-65535): "
     
     W_XAN_TITLE="⚠️ ВНИМАНИЕ / WARNING ⚠️"
-    W_XAN_TEXT="Эта операция заменит стандартное ядро Linux на кастомное ядро XanMod (с поддержкой BBRv3), перенастроит sysctl и развернет правила nftables (MSS Clamping).\nВАЖНО: Выполнение этого шага сбросит (flush) текущие правила файрвола, поэтому его делают ПЕРВЫМ.\n\nВы уверены, что хотите продолжить? [y/n]: "
-    W_XAN_REBOOT="⚠️ Скрипт отработал. Для активации нового ядра XanMod и BBRv3 ОБЯЗАТЕЛЬНО перезагрузите сервер командой: sudo reboot"
+    W_XAN_TEXT="Эта операция заменит ядро Linux на XanMod (с BBRv3) и перенастроит лимиты.\nВАЖНО: Выполнение этого шага сбросит (flush) текущие правила фаервола, делайте его ПЕРВЫМ.\n\nВы уверены, что хотите продолжить? [y/n]: "
+    W_XAN_REBOOT="⚠️ Скрипт отработал. Для активации нового ядра ОБЯЗАТЕЛЬНО перезагрузите сервер командой: sudo reboot"
     W_SSH_REBOOT="⚠️ ВАЖНО: НЕ ЗАКРЫВАЙТЕ ЭТО ОКНО ТЕРМИНАЛА!\nОткройте новую сессию и проверьте вход командой:"
     
     S_SPIN="Выполнение задачи"
     S_ERR="[ОШИБКА] Процесс завершился с кодом"
-    S_LOG="Вывод последних 50 строк лога"
+    S_LOG="Вывод лога"
     S_OK="[УСПЕШНО] Операция выполнена!"
     S_ENTER="Нажмите Enter для продолжения..."
     S_SPEED="Результаты Speedtest"
@@ -94,14 +93,14 @@ else
     M_IP="Your IP:"
     M_ASN="ASN:"
     
-    M_OPT_1="1. [STEP 1] Advanced Tuning (XanMod Kernel, BBRv3, Nftables) [⚠️ REBOOT]"
-    M_OPT_2="2. [STEP 1.ALT] Basic Network Tuning (No kernel change: IPv6 OFF, BBR+CAKE)"
-    M_OPT_3="3. [STEP 2] Setup Firewall (UFW + Auto-Domain + Block 25)"
+    M_OPT_1="1. [STEP 1] Advanced Tuning (XanMod, BBRv3, FD Limits) [⚠️ REBOOT]"
+    M_OPT_2="2. [STEP 1.ALT] Basic Network Tuning (BBR+CAKE, IPv6->UFW, FD Limits)"
+    M_OPT_3="3. [STEP 2] Setup Firewall (UFW + Auto-Domain + MSS Clamping)"
     M_OPT_4="4. [STEP 3] Install Anti-scanner (Traffic-Guard)"
-    M_OPT_5="5. [STEP 4] Setup Geo-blocking for DDoS (ipset)"
+    M_OPT_5="5. [STEP 4] Setup Geo-blocking for DDoS (ipset batch mode)"
     M_OPT_6="6. [STEP 5] Install Fail2Ban (SSH Protection via UFW)"
     M_OPT_7="7. [STEP 6] Install CrowdSec (Network IPS)"
-    M_OPT_8="8. [DIAGNOSTICS] Run Speedtest"
+    M_OPT_8="8. [DIAGNOSTICS] Run Speedtest (Official Ookla)"
     M_OPT_9="9. [DIAGNOSTICS] Check Geo-databases (IP Region)"
     M_OPT_10="10.[SYSTEM] Change SSH Port"
     M_OPT_0="0. Exit"
@@ -116,24 +115,26 @@ else
     P_NEW_SSH="Enter new SSH port (1024-65535): "
     
     W_XAN_TITLE="⚠️ WARNING / ВНИМАНИЕ ⚠️"
-    W_XAN_TEXT="This operation will replace your stock Linux kernel with custom XanMod kernel (enabling BBRv3), tune sysctl, and deploy nftables (MSS Clamping).\nCRITICAL: Running this step will FLUSH current firewall rules, which is why it must be executed FIRST.\n\nAre you sure you want to proceed? [y/n]: "
-    W_XAN_REBOOT="⚠️ Task finished. To activate the new XanMod kernel and BBRv3, you MUST reboot the server using: sudo reboot"
+    W_XAN_TEXT="This operation will replace your stock Linux kernel with XanMod and tune limits.\nCRITICAL: Running this step will FLUSH current firewall rules, execute FIRST.\n\nAre you sure you want to proceed? [y/n]: "
+    W_XAN_REBOOT="⚠️ Task finished. To activate the new kernel, you MUST reboot the server using: sudo reboot"
     W_SSH_REBOOT="⚠️ CRITICAL: DO NOT CLOSE THIS TERMINAL WINDOW!\nOpen a new session and verify login using:"
     
     S_SPIN="Executing task"
     S_ERR="[ERROR] Process failed with exit code"
-    S_LOG="Last 50 lines of the log"
+    S_LOG="Log output"
     S_OK="[SUCCESS] Operation completed!"
     S_ENTER="Press Enter to continue..."
     S_SPEED="Speedtest Results"
     S_GEO_CHECK="Geo-database Check"
 fi
 
-apt update -q >/dev/null 2>&1
-apt install -yq ufw curl wget ipset iptables speedtest-cli cron >/dev/null 2>&1
+# Предварительная установка базовых утилит с логированием
+echo -e "${YELLOW}Подготовка зависимостей / Preparing dependencies...${NC}"
+apt update -q >> "$LOG_FILE" 2>&1
+apt install -yq ufw curl wget ipset iptables cron dnsutils tar >> "$LOG_FILE" 2>&1
 
 # ==========================================
-# Анимация Звезды
+# Анимация
 # ==========================================
 spin_david_star() {
     local pid=$1
@@ -142,45 +143,17 @@ spin_david_star() {
     echo -e "\n\n\n\n\n\n\n"
     
     while kill -0 $pid 2>/dev/null; do
-        tput cuu 7
-        echo -e "${BLUE}        /\\        ${NC}"
-        echo -e "${BLUE}     __/  \\__     ${NC}"
-        echo -e "${BLUE}     \\  |   /     ${NC}"
-        echo -e "${BLUE}     /_ |  _\\     ${NC}"
-        echo -e "${BLUE}       \\  /       ${NC}"
-        echo -e "${BLUE}        \\/        ${NC}"
-        echo -e "${YELLOW} ${S_SPIN}...   ${NC}"
-        sleep $delay
-        
-        tput cuu 7
-        echo -e "${BLUE}        /\\        ${NC}"
-        echo -e "${BLUE}     __/ / \\__    ${NC}"
-        echo -e "${BLUE}     \\    / /     ${NC}"
-        echo -e "${BLUE}     /_ /  _\\     ${NC}"
-        echo -e "${BLUE}       \\  /       ${NC}"
-        echo -e "${BLUE}        \\/        ${NC}"
-        echo -e "${YELLOW} ${S_SPIN}..    ${NC}"
-        sleep $delay
-        
-        tput cuu 7
-        echo -e "${BLUE}        /\\        ${NC}"
-        echo -e "${BLUE}     __/   \\__    ${NC}"
-        echo -e "${BLUE}     \\ ---  /     ${NC}"
-        echo -e "${BLUE}     /_   _\\      ${NC}"
-        echo -e "${BLUE}       \\  /       ${NC}"
-        echo -e "${BLUE}        \\/        ${NC}"
-        echo -e "${YELLOW} ${S_SPIN}.     ${NC}"
-        sleep $delay
-        
-        tput cuu 7
-        echo -e "${BLUE}        /\\        ${NC}"
-        echo -e "${BLUE}     __\\   \\__    ${NC}"
-        echo -e "${BLUE}     \\  \\   /     ${NC}"
-        echo -e "${BLUE}     /_  \\ _\\     ${NC}"
-        echo -e "${BLUE}       \\  /       ${NC}"
-        echo -e "${BLUE}        \\/        ${NC}"
-        echo -e "${YELLOW} ${S_SPIN}       ${NC}"
-        sleep $delay
+        for frame in "..." ".." "." "   "; do
+            tput cuu 7
+            echo -e "${BLUE}        /\\        ${NC}"
+            echo -e "${BLUE}     __/  \\__     ${NC}"
+            echo -e "${BLUE}     \\  |   /     ${NC}"
+            echo -e "${BLUE}     /_ |  _\\     ${NC}"
+            echo -e "${BLUE}       \\  /       ${NC}"
+            echo -e "${BLUE}        \\/        ${NC}"
+            echo -e "${YELLOW} ${S_SPIN}${frame}   ${NC}"
+            sleep $delay
+        done
     done
     tput cnorm
 }
@@ -211,25 +184,45 @@ run_with_loader() {
 }
 
 # ==========================================
+# Вспомогательные функции (Лимиты)
+# ==========================================
+apply_fd_limits() {
+    # 1. Глобальные лимиты Systemd (для демонов Xray/VLESS)
+    sed -i '/^#DefaultLimitNOFILE=/s/^#//; s/DefaultLimitNOFILE=.*/DefaultLimitNOFILE=1000000/' /etc/systemd/system.conf
+    if ! grep -q "^DefaultLimitNOFILE=1000000" /etc/systemd/system.conf; then
+        echo "DefaultLimitNOFILE=1000000" >> /etc/systemd/system.conf
+    fi
+    systemctl daemon-reload
+
+    # 2. Лимиты для пользовательских сессий PAM
+    cat << 'EOF' > /etc/security/limits.d/99-remnanode-nofile.conf
+* soft nofile 1000000
+* hard nofile 1000000
+root soft nofile 1000000
+root hard nofile 1000000
+EOF
+}
+
+# ==========================================
 # Рабочие функции (Бизнес-логика)
 # ==========================================
 setup_xanmod_bbr3() {
     export DEBIAN_FRONTEND=noninteractive
     
     apt-get update && apt-get install -y wget curl gpg ca-certificates lsb-release
-    
     mkdir -p /etc/apt/keyrings
     rm -f /etc/apt/sources.list.d/xanmod.list /etc/apt/sources.list.d/xanmod-release.list /etc/apt/keyrings/xanmod-archive-keyring.gpg 2>/dev/null
-    
     curl -fsSL https://dl.xanmod.org/archive.key -o /etc/apt/keyrings/xanmod-archive-keyring.gpg
-    
     echo "deb [signed-by=/etc/apt/keyrings/xanmod-archive-keyring.gpg] http://deb.xanmod.org $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/xanmod-release.list
     
     apt-get update
     apt-get install -yq linux-xanmod-x64v3 dkms libelf-dev clang lld llvm
 
+    apply_fd_limits
+
     local sysctl_conf="/etc/sysctl.d/99-network-optimization.conf"
     cat << 'EOF' > $sysctl_conf
+fs.file-max = 1000000
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_fastopen = 3
@@ -281,18 +274,20 @@ EOF
 }
 
 setup_network() {
-    sed -i '/disable_ipv6/d' /etc/sysctl.conf
-    sed -i '/default_qdisc/d' /etc/sysctl.conf
-    sed -i '/tcp_congestion_control/d' /etc/sysctl.conf
+    apply_fd_limits
 
-    cat >> /etc/sysctl.conf << EOF
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-net.ipv6.conf.lo.disable_ipv6 = 1
+    cat > /etc/sysctl.d/99-basic-tuning.conf << EOF
+fs.file-max = 1000000
 net.core.default_qdisc = cake
 net.ipv4.tcp_congestion_control = bbr
 EOF
-    sysctl -p
+    sysctl --system
+    
+    # Безопасное отключение IPv6 через UFW (сохраняет биндинг сокетов :: для Xray)
+    if [ -f /etc/default/ufw ]; then
+        sed -i 's/IPV6=yes/IPV6=no/g' /etc/default/ufw
+        ufw reload 2>/dev/null || true
+    fi
 }
 
 setup_ufw() {
@@ -309,11 +304,16 @@ setup_ufw() {
     ufw allow 443/tcp comment 'HTTPS'
     ufw allow $vpn_port comment 'VPN/Xray'
 
+    # MSS Clamping напрямую в UFW
+    local ufw_before="/etc/ufw/before.rules"
+    if ! grep -q "clamp-mss-to-pmtu" "$ufw_before" 2>/dev/null; then
+        sed -i '/COMMIT/i # Настройка MSS Clamping\n-A ufw-before-forward -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu\n' "$ufw_before"
+    fi
+
     if [ -n "$panel_input" ]; then
         if [[ $panel_input =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             ufw allow from "$panel_input" to any port $vpn_port proto tcp comment 'Panel_IP'
         else
-            apt-get install -yq dnsutils >/dev/null 2>&1
             local panel_ip=$(dig +short A "$panel_input" | grep -E '^[0-9.]+$' | head -n 1)
             if [ -z "$panel_ip" ]; then
                 panel_ip=$(nslookup "$panel_input" 2>/dev/null | awk '/^Address: / { print $2 }' | head -n 1)
@@ -344,10 +344,11 @@ EOF
                 chmod +x /usr/local/bin/remnanode_ufw_updater.sh
                 echo "$panel_ip" > /var/run/remnanode_panel_ip.txt
                 
-                crontab -l 2>/dev/null | grep -v "/usr/local/bin/remnanode_ufw_updater.sh" > /tmp/cron_temp
-                echo "0 */6 * * * /usr/local/bin/remnanode_ufw_updater.sh >/dev/null 2>&1" >> /tmp/cron_temp
-                crontab /tmp/cron_temp
-                rm /tmp/cron_temp
+                TMP_CRON=$(mktemp)
+                crontab -l 2>/dev/null | grep -v "/usr/local/bin/remnanode_ufw_updater.sh" > "$TMP_CRON"
+                echo "0 */6 * * * /usr/local/bin/remnanode_ufw_updater.sh >/dev/null 2>&1" >> "$TMP_CRON"
+                crontab "$TMP_CRON"
+                rm -f "$TMP_CRON"
                 systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null
             fi
         fi
@@ -363,6 +364,8 @@ EOF
         ufw deny out from any to $ip comment 'Block_Malicious_IP'
     done
 
+    # Безопасное отключение IPv6 через UFW
+    sed -i 's/IPV6=yes/IPV6=no/g' /etc/default/ufw
     ufw --force enable
 }
 
@@ -388,9 +391,7 @@ setup_geoblock() {
     iptables -I INPUT -s $user_ip -j ACCEPT
 
     for code in "${countries[@]}"; do
-        curl -s "https://www.ipdeny.com/ipblocks/data/countries/$(echo $code | tr '[:upper:]' '[:lower:]').zone" | while read ip; do
-            ipset add geo_block $ip -exist
-        done
+        curl -s "https://www.ipdeny.com/ipblocks/data/countries/$(echo $code | tr '[:upper:]' '[:lower:]').zone" | awk '{print "add geo_block "$1}' | ipset restore -!
     done
 
     iptables -D INPUT -m set --match-set geo_block src -j DROP 2>/dev/null
@@ -400,7 +401,9 @@ setup_geoblock() {
 setup_fail2ban() {
     local ssh_port=$1
     apt-get install fail2ban -y
-    cat > /etc/fail2ban/jail.local <<EOL
+    
+    mkdir -p /etc/fail2ban/jail.d
+    cat > /etc/fail2ban/jail.d/99-remnanode-ssh.local <<EOL
 [sshd]
 enabled   = true
 port      = $ssh_port
@@ -421,24 +424,25 @@ setup_crowdsec() {
     systemctl start crowdsec
 }
 
+run_ookla_speedtest() {
+    # Скачиваем официальный бинарник Ookla вместо кривого python скрипта
+    if [ ! -f /usr/local/bin/speedtest ]; then
+        curl -sL https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz | tar xz -C /usr/local/bin speedtest
+    fi
+    /usr/local/bin/speedtest --accept-license --accept-gdpr -f text
+}
+
 change_ssh_port() {
     local new_port=$1
-    local sshd_config="/etc/ssh/sshd_config"
-
-    sed -i -e "s/^#\?Port .*/Port $new_port/" "$sshd_config"
-    if ! grep -q "^Port $new_port" "$sshd_config"; then
-        echo "Port $new_port" >> "$sshd_config"
-    fi
+    
+    mkdir -p /etc/ssh/sshd_config.d
+    echo "Port $new_port" > /etc/ssh/sshd_config.d/99-custom-port.conf
 
     if command -v ufw > /dev/null; then
         ufw allow "$new_port"/tcp comment 'SSH_New'
     elif command -v firewall-cmd > /dev/null; then
         firewall-cmd --permanent --add-port="$new_port"/tcp
         firewall-cmd --reload
-    fi
-
-    if command -v semanage > /dev/null; then
-        semanage port -a -t ssh_port_t -p tcp "$new_port" 2>/dev/null || true
     fi
 
     if systemctl is-active --quiet ssh; then
@@ -551,7 +555,7 @@ while true; do
             run_with_loader "setup_crowdsec"
             ;;
         8)
-            run_with_loader "speedtest-cli --simple"
+            run_with_loader "run_ookla_speedtest"
             if [ $? -eq 0 ]; then
                 echo -e "\n${BLUE}--- ${S_SPEED} ---${NC}"
                 cat "$LOG_FILE"
