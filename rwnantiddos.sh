@@ -423,35 +423,43 @@ run_ookla_speedtest() {
 
 change_ssh_port() {
     local new_port=$1
-    
-    # 1. Ядерный удар: комментируем стандартный 22 порт в главном конфиге, если он там есть
-    if [ -f /etc/ssh/sshd_config ]; then
-        sed -i 's/^Port 22/#Port 22/' /etc/ssh/sshd_config
-    fi
-    
-    # 2. Создаем чистый конфиг для порта
-    mkdir -p /etc/ssh/sshd_config.d
-    echo "Port $new_port" > /etc/ssh/sshd_config.d/99-custom-port.conf
+    local conf_dir="/etc/ssh/sshd_config.d"
 
-    # 3. Открываем порт в фаерволе
+    # 1. Обеспечиваем работу Include (важно для debian-based систем)
+    mkdir -p "$conf_dir"
+    if ! grep -q "^Include /etc/ssh/sshd_config.d/" /etc/ssh/sshd_config; then
+        sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+    fi
+
+    # 2. Ядерный удар по 22 порту
+    sed -i 's/^Port 22/#Port 22/' /etc/ssh/sshd_config
+
+    # 3. Создаем конфиг
+    echo "Port $new_port" > "$conf_dir/99-custom-port.conf"
+
+    # 4. Фаервол (без изменений)
     if command -v ufw > /dev/null; then
         ufw allow "$new_port"/tcp comment 'SSH_New'
-        # На всякий случай закрываем старый, если надо
         ufw delete allow 22/tcp 2>/dev/null
     elif command -v firewall-cmd > /dev/null; then
         firewall-cmd --permanent --add-port="$new_port"/tcp
         firewall-cmd --reload
     fi
 
-    # 4. Рестарт с проверкой синтаксиса
+    # 5. КЛЮЧЕВОЙ МОМЕНТ: Останавливаем сокеты, которые могут держать 22 порт
+    # В современных дистрибутивах (Ubuntu 22.04/24.04+) sshd.socket может перехватывать порт
+    if systemctl is-active --quiet sshd.socket; then
+        systemctl stop sshd.socket
+        systemctl disable sshd.socket
+    fi
+
+    # 6. Рестарт сервиса
     if sshd -t; then
-        if systemctl is-active --quiet ssh; then
-            systemctl restart ssh
-        else
-            systemctl restart sshd
-        fi
+        # Перезагружаем демона
+        systemctl restart ssh 2>/dev/null || systemctl restart sshd
+        echo "Порт успешно изменен на $new_port. Проверь статус: ss -tulpn | grep ssh"
     else
-        echo "Ошибка в конфиге SSH, отмена рестарта!"
+        echo "Ошибка в конфигурации! Откат не выполнен."
         exit 1
     fi
 }
