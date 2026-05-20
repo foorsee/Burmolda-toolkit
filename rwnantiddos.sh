@@ -424,20 +424,35 @@ run_ookla_speedtest() {
 change_ssh_port() {
     local new_port=$1
     
+    # 1. Ядерный удар: комментируем стандартный 22 порт в главном конфиге, если он там есть
+    if [ -f /etc/ssh/sshd_config ]; then
+        sed -i 's/^Port 22/#Port 22/' /etc/ssh/sshd_config
+    fi
+    
+    # 2. Создаем чистый конфиг для порта
     mkdir -p /etc/ssh/sshd_config.d
     echo "Port $new_port" > /etc/ssh/sshd_config.d/99-custom-port.conf
 
+    # 3. Открываем порт в фаерволе
     if command -v ufw > /dev/null; then
         ufw allow "$new_port"/tcp comment 'SSH_New'
+        # На всякий случай закрываем старый, если надо
+        ufw delete allow 22/tcp 2>/dev/null
     elif command -v firewall-cmd > /dev/null; then
         firewall-cmd --permanent --add-port="$new_port"/tcp
         firewall-cmd --reload
     fi
 
-    if systemctl is-active --quiet ssh; then
-        systemctl restart ssh
-    elif systemctl is-active --quiet sshd; then
-        systemctl restart sshd
+    # 4. Рестарт с проверкой синтаксиса
+    if sshd -t; then
+        if systemctl is-active --quiet ssh; then
+            systemctl restart ssh
+        else
+            systemctl restart sshd
+        fi
+    else
+        echo "Ошибка в конфиге SSH, отмена рестарта!"
+        exit 1
     fi
 }
 
